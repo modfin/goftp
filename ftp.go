@@ -18,6 +18,7 @@ var RePwdPath = regexp.MustCompile(`\"(.*)\"`)
 
 // FTP is a session for File Transfer Protocol
 type FTP struct {
+	dialer Dialer
 	conn net.Conn
 
 	addr string
@@ -174,7 +175,7 @@ func (ftp *FTP) newConnection(port int) (conn net.Conn, err error) {
 		log.Printf("Connecting to %s\n", addr)
 	}
 
-	if conn, err = net.Dial("tcp", addr); err != nil {
+	if conn, err = ftp.dialer.Dial("tcp", addr); err != nil {
 		return
 	}
 
