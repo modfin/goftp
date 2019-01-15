@@ -21,7 +21,7 @@ func ConnectWithDialer(addr string, dialer Dialer) (*FTP, error) {
 
 // Connect to server at addr (format "host:port"). debug is OFF
 func Connect(addr string) (*FTP, error) {
-	return connect(addr, &net.Dialer{}, true)
+	return connect(addr, &net.Dialer{}, false)
 }
 
 // ConnectDbg to server at addr (format "host:port"). debug is ON
