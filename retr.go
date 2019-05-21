@@ -32,7 +32,8 @@ func (ftp *FTP) Retr(path string, retrFn RetrFunc) (s string, err error) {
 		return
 	}
 
-	if !strings.HasPrefix(line, StatusFileOK) {
+	statusCode := StatusCode(line)
+	if !( statusCode == StatusFileOK || statusCode == StatusAlreadyOpen ) {
 		err = errors.New(line)
 		return
 	}

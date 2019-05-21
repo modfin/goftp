@@ -3,6 +3,7 @@ package goftp
 // FTP Status codes, defined in RFC 959
 const (
 	StatusFileOK                = "150"
+	StatusAlreadyOpen           = "125"
 	StatusOK                    = "200"
 	StatusSystemStatus          = "211"
 	StatusDirectoryStatus       = "212"
@@ -17,6 +18,7 @@ const (
 
 var statusText = map[string]string{
 	StatusFileOK:                "File status okay; about to open data connection",
+	StatusAlreadyOpen:           "Data connection already open; Transfer starting",
 	StatusOK:                    "Command okay",
 	StatusSystemStatus:          "System status, or system help reply",
 	StatusDirectoryStatus:       "Directory status",
@@ -33,4 +35,12 @@ var statusText = map[string]string{
 // string if the code is unknown.
 func StatusText(code string) string {
 	return statusText[code]
+}
+
+// StatusCode Return the status code from FTP text
+func StatusCode(text string) string {
+	if len(text) < 3 {
+		return ""
+	}
+	return text[:3]
 }

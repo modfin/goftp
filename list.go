@@ -34,7 +34,8 @@ func (ftp *FTP) List(path string) (files []string, err error) {
 		return
 	}
 
-	if !strings.HasPrefix(line, StatusFileOK) {
+	statusCode := StatusCode(line)
+	if !( statusCode == StatusFileOK || statusCode == StatusAlreadyOpen ) {
 		// MLSD failed, lets try LIST
 		if err = ftp.send("LIST %s", path); err != nil {
 			return
@@ -44,7 +45,8 @@ func (ftp *FTP) List(path string) (files []string, err error) {
 			return
 		}
 
-		if !strings.HasPrefix(line, StatusFileOK) {
+		statusCode = StatusCode(line)
+		if !( statusCode == StatusFileOK || statusCode == StatusAlreadyOpen ) {
 			// Really list is not working here
 			err = errors.New(line)
 			return

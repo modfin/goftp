@@ -33,7 +33,8 @@ func (ftp *FTP) Stor(path string, r io.Reader) (err error) {
 		return
 	}
 
-	if !strings.HasPrefix(line, StatusFileOK) {
+	statusCode := StatusCode(line)
+	if !( statusCode == StatusFileOK || statusCode == StatusAlreadyOpen ) {
 		err = errors.New(line)
 		return
 	}
