@@ -6,8 +6,5 @@ func (ftp *FTP) Quit() (err error) {
 		return err
 	}
 
-	ftp.conn.Close()
-	ftp.conn = nil
-
-	return nil
+	return ftp.closeWithReason("quit")
 }

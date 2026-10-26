@@ -1,7 +1,6 @@
 package goftp
 
 import (
-	"log"
 	"os"
 )
 
@@ -14,10 +13,6 @@ func (ftp *FTP) Walk(path string, walkFn WalkFunc) (err error) {
 			}
 		}
 	*/
-	if ftp.debug {
-		log.Printf("Walking: '%s'\n", path)
-	}
-
 	var lines []string
 
 	if lines, err = ftp.List(path); err != nil {

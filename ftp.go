@@ -3,23 +3,24 @@ package goftp
 import (
 	"bufio"
 	"crypto/tls"
-	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"os"
 	"regexp"
 	"strings"
+	"sync"
+	"time"
 )
 
 // RePwdPath is the default expression for matching files in the current working directory
 var RePwdPath = regexp.MustCompile(`\"(.*)\"`)
 
-// FTP is a session for File Transfer Protocol
+// FTP is a session for File Transfer Protocol. Operations on a session must be
+// performed serially; use separate sessions for concurrent transfers.
 type FTP struct {
 	dialer Dialer
-	conn net.Conn
+	conn   net.Conn
 
 	addr string
 
@@ -28,6 +29,16 @@ type FTP struct {
 
 	reader *bufio.Reader
 	writer *bufio.Writer
+
+	pasvTimeout time.Duration
+	observer    Observer
+	observerMu  sync.Mutex
+	closeOnce   sync.Once
+	closeErr    error
+
+	command      string
+	replyStarted time.Time
+	storReplies  int
 }
 
 type (
@@ -65,7 +76,7 @@ func (ftp *FTP) cmd(expects string, command string, args ...interface{}) (line s
 	}
 
 	if !strings.HasPrefix(line, expects) {
-		err = errors.New(line)
+		err = &replyError{line: line}
 		return
 	}
 
@@ -73,50 +84,37 @@ func (ftp *FTP) cmd(expects string, command string, args ...interface{}) (line s
 }
 
 func (ftp *FTP) receiveLine() (string, error) {
-	line, err := ftp.reader.ReadString('\n')
-
-	if ftp.debug {
-		log.Printf("< %s", line)
-	}
-
-	return line, err
+	return ftp.reader.ReadString('\n')
 }
 
 func (ftp *FTP) receive() (string, error) {
-	line, err := ftp.receiveLine()
-
-	if err != nil {
-		return line, err
-	}
-
-	if (len(line) >= 4) && (line[3] == '-') {
-		//Multiline response
-		closingCode := line[:3] + " "
-		for {
-			str, err := ftp.receiveLine()
-			line = line + str
-			if err != nil {
-				return line, err
-			}
-			if len(str) < 4 {
-				if ftp.debug {
-					log.Println("Uncorrectly terminated response")
-				}
-				break
-			} else {
-				if str[:4] == closingCode {
-					break
-				}
-			}
-		}
-	}
-	ftp.ReadAndDiscard()
-	//fmt.Println(line)
-	return line, err
+	return ftp.receiveResponse(true)
 }
 
 func (ftp *FTP) receiveNoDiscard() (string, error) {
-	line, err := ftp.receiveLine()
+	return ftp.receiveResponse(false)
+}
+
+func (ftp *FTP) receiveResponse(discard bool) (line string, err error) {
+	start := ftp.replyStarted
+	if start.IsZero() {
+		start = time.Now()
+	}
+	phase := "command_reply"
+	if ftp.command == "" {
+		phase = "greeting"
+	} else if ftp.command == "STOR" {
+		phase = "stor_preliminary"
+		if ftp.storReplies > 0 {
+			phase = "stor_completion"
+		}
+		ftp.storReplies++
+	}
+	defer func() {
+		ftp.replyStarted = time.Time{}
+		ftp.observe(Event{Phase: phase, Command: ftp.command, ReplyCode: replyCode(line)}, start, err)
+	}()
+	line, err = ftp.receiveLine()
 
 	if err != nil {
 		return line, err
@@ -132,9 +130,6 @@ func (ftp *FTP) receiveNoDiscard() (string, error) {
 				return line, err
 			}
 			if len(str) < 4 {
-				if ftp.debug {
-					log.Println("Uncorrectly terminated response")
-				}
 				break
 			} else {
 				if str[:4] == closingCode {
@@ -143,17 +138,18 @@ func (ftp *FTP) receiveNoDiscard() (string, error) {
 			}
 		}
 	}
-	//ftp.ReadAndDiscard()
-	//fmt.Println(line)
+	if discard {
+		ftp.ReadAndDiscard()
+	}
 	return line, err
 }
 
-func (ftp *FTP) send(command string, arguments ...interface{}) error {
-	if ftp.debug {
-		log.Printf("> %s", fmt.Sprintf(command, arguments...))
-	}
-
+func (ftp *FTP) send(command string, arguments ...interface{}) (err error) {
 	command = fmt.Sprintf(command, arguments...)
+	ftp.command = commandName(command)
+	ftp.storReplies = 0
+	ftp.replyStarted = time.Now()
+	defer func() { ftp.observe(Event{Phase: "command_send", Command: ftp.command}, ftp.replyStarted, err) }()
 	command += "\r\n"
 
 	if _, err := ftp.writer.WriteString(command); err != nil {
@@ -170,10 +166,8 @@ func (ftp *FTP) send(command string, arguments ...interface{}) error {
 // open new data connection
 func (ftp *FTP) newConnection(port int) (conn net.Conn, err error) {
 	addr := fmt.Sprintf("%s:%d", strings.Split(ftp.addr, ":")[0], port)
-
-	if ftp.debug {
-		log.Printf("Connecting to %s\n", addr)
-	}
+	start := time.Now()
+	defer func() { ftp.observe(Event{Phase: "data_dial", PassivePort: port}, start, err) }()
 
 	if conn, err = ftp.dialer.Dial("tcp", addr); err != nil {
 		return

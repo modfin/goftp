@@ -2,11 +2,14 @@ package goftp
 
 import (
 	"strings"
+	"time"
 )
 
 // Login to the server with provided username and password.
 // Typical default may be ("anonymous","").
 func (ftp *FTP) Login(username string, password string) (err error) {
+	start := time.Now()
+	defer func() { ftp.observe(Event{Phase: "login"}, start, err) }()
 	if _, err = ftp.cmd("331", "USER %s", username); err != nil {
 		if strings.HasPrefix(err.Error(), "230") {
 			// Ok, probably anonymous server
