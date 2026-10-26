@@ -20,7 +20,7 @@ import (
     "os"
 
     "encoding/hex"
-    "gopkg.in/dutchcoders/goftp"
+    "github.com/modfin/goftp"
 )
 
 func main() {
@@ -116,3 +116,85 @@ Contributions are welcome.
 Code and documentation copyright 2011-2014 Remco Verhoef.
 Code released under [the MIT license](LICENSE).
 
+
+## PASV timeouts and structured diagnostics
+
+Existing `Connect`, `ConnectDbg` and custom-dialer entry points remain available.
+Use `ConnectWithOptions` to observe the connection from the initial dial:
+
+```go
+conn, err := goftp.ConnectWithOptions("ftp.example.com:21", goftp.Options{
+    Dialer: customDialer, // optional; also used for passive data connections
+    // PasvTimeout: 10 * time.Second, // zero keeps the 10-second default
+    Observer: func(event goftp.Event) {
+        // Add application attempt/session IDs here. Event.Time is UTC.
+        // Duration is a time.Duration (nanoseconds in JSON).
+        log.Printf("time=%s phase=%s command=%s reply=%d passive_port=%d duration=%s bytes=%d error_kind=%s close_reason=%s",
+            event.Time.Format(time.RFC3339Nano), event.Phase, event.Command,
+            event.ReplyCode, event.PassivePort, event.Duration, event.Bytes,
+            event.ErrorKind, event.CloseReason)
+    },
+})
+if err != nil {
+    return err
+}
+defer conn.Close()
+```
+
+`PasvTimeout` covers sending `PASV` and receiving/parsing its complete `227`
+reply. It does not cover login, `TYPE I`, data dialing, uploading or waiting for
+`226`. On expiry, the library closes the control connection, waits for the
+pending command to stop, and returns `ErrPasvTimeout` (text: `PasvTimeout`). Use
+`errors.Is(err, goftp.ErrPasvTimeout)` to recognize this condition; it also
+implements `net.Error` with `Timeout() == true`. Retry on a new connection.
+This fixes the competing writes that could replace the timeout with a closed
+connection error; it does not resolve server or network latency.
+
+| Phase | Meaning |
+| --- | --- |
+| `dial`, `greeting` | TCP/custom-dialer setup and initial server reply |
+| `auth_tls`, `tls_handshake`, `login` | Setup operations and TLS handshake |
+| `command_send` | Writing and flushing a command, without its arguments |
+| `command_reply` | First reply latency, measured from the start of command sending |
+| `pasv` | Entire PASV exchange, including its authoritative timeout result |
+| `data_dial` | Opening the passive data connection using the configured dialer |
+| `stor_preliminary` | STOR reply (`125`/`150`), measured from command sending |
+| `data_copy` | Upload stream copy, including any data-channel TLS handshake |
+| `stor_completion` | Waiting for the final reply (`226`), after closing the data connection |
+| `store` | Entire file upload; bytes copied are included even on later failure |
+| `close` | Control connection closure and its cause |
+
+Durations of enclosing operations include their child operations and should not
+be added together. `Bytes` means bytes copied to the data connection, not proof
+that the server stored the file: only a successful `store` event confirms the
+final reply. `CloseReason` is `caller`, `quit`, `pasv_timeout`, `greeting_error`
+or `tls_error`. A local timeout can produce a `closed` command-reply event before
+the enclosing `pasv` event reports `pasv_timeout`.
+
+Events include numeric reply codes, passive ports and error categories, never raw server
+replies, command arguments, filenames, passwords or payloads. The legacy debug
+entry points now log these same redacted fields. Original errors are still
+returned to callers; applications should avoid logging them blindly because
+server replies can contain sensitive text.
+
+Observers run synchronously and are serialized per connection, including events
+from the PASV worker. They must return promptly and must not call back into the
+connection. Synchronize an observer shared across connections. FTP operations
+on a connection must be sequential. Configure non-PASV deadlines through your
+custom dialer/connection as before; this change adds no overall transfer deadline.
+
+## Tests
+
+The offline tests use `net.Pipe` and include protocol failures, TLS, log redaction
+and timeout races. This repository retains its existing layout without a
+`go.mod`; run with Go 1.16 or later:
+
+```sh
+GO111MODULE=off go test -race ./...
+```
+
+The older tests that contact public FTP servers are opt-in:
+
+```sh
+GO111MODULE=off go test -tags=integration ./...
+```
